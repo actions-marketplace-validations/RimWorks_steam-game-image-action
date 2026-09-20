@@ -52,6 +52,9 @@ on:
       registry-password:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: build-image

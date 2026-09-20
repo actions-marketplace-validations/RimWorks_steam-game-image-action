@@ -8,19 +8,29 @@ on:
     branches: [main]
     paths:
       - Dockerfile.runtime-base
+      - Dockerfile.runtime-base-proton
+      - scripts/run-headless-windows.sh
+      - scripts/run-headless.sh
+      - scripts/headless-common.sh
       - .github/workflows/runtime-base.yml
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   runtime-base:
     name: build+push runtime-base
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,4 +43,27 @@ jobs:
           set -euo pipefail
           IMG="ghcr.io/${REPO,,}/runtime-base"
           docker build --pull -f Dockerfile.runtime-base -t "$IMG:latest" .
+          docker push "$IMG:latest"
+
+  runtime-base-proton:
+    name: build+push runtime-base-proton
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - name: Build and push runtime-base-proton
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          IMG="ghcr.io/${REPO,,}/runtime-base-proton"
+          docker build --pull -f Dockerfile.runtime-base-proton -t "$IMG:latest" .
           docker push "$IMG:latest"

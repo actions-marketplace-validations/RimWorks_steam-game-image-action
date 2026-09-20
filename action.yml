@@ -7,11 +7,16 @@ branding:
 
 inputs:
   steam-username:
-    description: "Steam account name that owns the game and matches the config.vdf session."
-    required: true
+    description: >-
+      Steam account name. Leave it and steam-config-vdf empty when the run has no secrets
+      (a pull request from a fork): the action then skips the build and outputs the
+      image:latest-<branch> a credentialed run already pushed.
+    required: false
+    default: ""
   steam-config-vdf:
-    description: "Base64-encoded steamcmd config.vdf for a logged-in session (a repo secret)."
-    required: true
+    description: "base64 of a logged-in steamcmd config.vdf. Empty means no Steam access, see steam-username."
+    required: false
+    default: ""
   app-id:
     description: "Steam app id to download."
     required: false
@@ -22,6 +27,13 @@ inputs:
     default: "public"
   branch-password:
     description: "Password for a password-protected beta branch (optional)."
+    required: false
+    default: ""
+  steam-platform:
+    description: >-
+      Depot platform to download (linux, windows, macos). Empty (default) = the
+      platform steamcmd runs on. Pair 'windows' with a Proton-capable base-image;
+      the default runtime base has no wine.
     required: false
     default: ""
   image:
@@ -63,9 +75,17 @@ inputs:
     required: false
     default: "linux/amd64"
   crane-version:
-    description: "go-containerregistry (crane) version to install."
+    description: "go-containerregistry (crane) version to install. Override it and you must set crane-sha256 too."
     required: false
     default: "0.20.2"
+  crane-sha256:
+    description: "sha256 of the crane linux x86_64 tarball. Defaults to the hash for crane-version's default."
+    required: false
+    default: "c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+  require-private:
+    description: "true = fail when the pushed image is anonymously pullable. A game image must never be public."
+    required: false
+    default: "true"
   skip-if-unchanged:
     description: "true = compare the published buildid to the image's steam.buildid label and skip when unchanged."
     required: false
@@ -81,8 +101,8 @@ inputs:
 
 outputs:
   image-ref:
-    description: "Image ref to consume: image:version when built, image:latest-<branch> when the build was skipped."
-    value: ${{ steps.build.outputs.image-ref || steps.gate.outputs.image-ref }}
+    description: "Image ref to consume: image:version when built, image:latest-<branch> when the build was skipped or the run had no Steam credentials."
+    value: ${{ steps.build.outputs.image-ref || steps.gate.outputs.image-ref || steps.reuse.outputs.image-ref }}
   version:
     description: "The version tag used."
     value: ${{ steps.build.outputs.version }}
@@ -90,8 +110,8 @@ outputs:
     description: "The Steam buildid that was built."
     value: ${{ steps.gate.outputs.published }}
   skipped:
-    description: "true if the build was skipped because the buildid was unchanged."
-    value: ${{ steps.gate.outputs.skipped }}
+    description: "true if the build was skipped: the buildid was unchanged, or the run had no Steam credentials."
+    value: ${{ steps.gate.outputs.skipped || steps.reuse.outputs.skipped }}
 
 runs:
   using: composite
@@ -100,6 +120,7 @@ runs:
       shell: bash
       env:
         CRANE_VERSION: ${{ inputs.crane-version }}
+        CRANE_SHA256: ${{ inputs.crane-sha256 }}
       run: |
         set -euo pipefail
         # Retry transient mirror hiccups (the runner's packages.microsoft.com source
@@ -108,14 +129,41 @@ runs:
         sudo apt-get -o Acquire::Retries=3 update -qq
         sudo apt-get install -y -qq --no-install-recommends ca-certificates curl tar jq lib32gcc-s1 >/dev/null
         mkdir -p "$HOME/.steamcmd"
-        curl -sqL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+        # valve ships steamcmd from one unversioned url, so there is no stable hash to pin.
+        curl -sqL --proto '=https' --proto-redir '=https' https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
           | tar zxf - -C "$HOME/.steamcmd"
         printf '#!/bin/sh\nexec "%s/steamcmd.sh" "$@"\n' "$HOME/.steamcmd" | sudo tee /usr/local/bin/steamcmd >/dev/null
         sudo chmod +x /usr/local/bin/steamcmd
-        curl -sSL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
-          | sudo tar -xzf - -C /usr/local/bin crane
+        # crane runs with the registry password on stdin, so the hash is pinned here rather
+        # than taken from the release's own checksums.txt, which proves nothing
+        if [ "$CRANE_VERSION" != "0.20.2" ] && [ "$CRANE_SHA256" = "c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b" ]; then
+          echo "::error::crane-version is $CRANE_VERSION but crane-sha256 is still the 0.20.2 default." \
+               "Set crane-sha256 to that release's go-containerregistry_Linux_x86_64.tar.gz hash." >&2
+          exit 1
+        fi
+        curl -sSL --proto '=https' --proto-redir '=https' -o /tmp/crane.tar.gz \
+          "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+        echo "${CRANE_SHA256}  /tmp/crane.tar.gz" | sha256sum -c -
+        sudo tar -xzf /tmp/crane.tar.gz -C /usr/local/bin crane
+        rm -f /tmp/crane.tar.gz
+
+    - name: Check for Steam credentials
+      id: creds
+      shell: bash
+      env:
+        STEAM_USERNAME: ${{ inputs.steam-username }}
+        STEAM_CONFIG_VDF_B64: ${{ inputs.steam-config-vdf }}
+      run: |
+        set -euo pipefail
+        if [ -n "$STEAM_USERNAME" ] && [ -n "$STEAM_CONFIG_VDF_B64" ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "no Steam credentials; the image a credentialed run pushed is reused instead"
+        fi
 
     - name: Steam login
+      if: steps.creds.outputs.present == 'true'
       shell: bash
       env:
         STEAM_CONFIG_VDF_B64: ${{ inputs.steam-config-vdf }}
@@ -154,6 +202,7 @@ runs:
 
     - name: Build-id gate
       id: gate
+      if: steps.creds.outputs.present == 'true'
       shell: bash
       env:
         STEAM_USERNAME: ${{ inputs.steam-username }}
@@ -185,45 +234,96 @@ runs:
           echo "skipped=false" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Reuse the published image
+      id: reuse
+      if: steps.creds.outputs.present != 'true'
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_USER: ${{ inputs.registry-username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+        IMAGE: ${{ steps.base.outputs.image }}
+        BRANCH_TAG: ${{ steps.base.outputs.branch-tag }}
+      run: |
+        set -euo pipefail
+        ref="$(bash "${{ github.action_path }}/scripts/reuse-existing.sh")"
+        echo "skipped=true" >> "$GITHUB_OUTPUT"
+        echo "image-ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "reusing $ref"
+
     - name: Restore game install cache
-      if: steps.gate.outputs.skipped != 'true'
-      uses: actions/cache@v4
+      id: game-cache
+      if: steps.creds.outputs.present == 'true' && steps.gate.outputs.skipped != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         # Restore the prior install so steamcmd app_update fetches only the delta.
         # The exact-buildid key never hits on a real rebuild (the gate only lets us
         # here when the buildid changed), so the prefix restore-key restores the most
         # recent install and a fresh entry is saved post-job under the new buildid.
         path: ${{ runner.temp }}/steam-game
-        key: steam-${{ inputs.app-id }}-${{ inputs.branch }}-${{ steps.gate.outputs.published }}
+        key: steam-${{ inputs.app-id }}-${{ inputs.branch }}-${{ inputs.steam-platform != '' && inputs.steam-platform || 'host' }}-${{ steps.gate.outputs.published }}
         restore-keys: |
-          steam-${{ inputs.app-id }}-${{ inputs.branch }}-
+          steam-${{ inputs.app-id }}-${{ inputs.branch }}-${{ inputs.steam-platform != '' && inputs.steam-platform || 'host' }}-
 
     - name: Download game
-      if: steps.gate.outputs.skipped != 'true'
+      if: steps.creds.outputs.present == 'true' && steps.gate.outputs.skipped != 'true'
       shell: bash
       env:
         STEAM_USERNAME: ${{ inputs.steam-username }}
         APP_ID: ${{ inputs.app-id }}
         BRANCH: ${{ inputs.branch }}
         BRANCH_PASSWORD: ${{ inputs.branch-password }}
+        # Never name this STEAM_PLATFORM: steamcmd.sh picks its own binary directory from
+        # that variable, so it would hunt for .steamcmd/windows/steamcmd and exit.
+        DEPOT_PLATFORM: ${{ inputs.steam-platform }}
       run: |
         set -euo pipefail
         dir="${RUNNER_TEMP:-/tmp}/steam-game"
         mkdir -p "$dir"
         beta=(); [ "$BRANCH" != "public" ] && beta=(-beta "$BRANCH")
         [ -n "$BRANCH_PASSWORD" ] && beta+=(-betapassword "$BRANCH_PASSWORD")
+        plat=(); [ -n "$DEPOT_PLATFORM" ] && plat=(+@sSteamCmdForcePlatformType "$DEPOT_PLATFORM")
         steamcmd \
           +@ShutdownOnFailedCommand 1 \
           +@NoPromptForPassword 1 \
+          "${plat[@]}" \
           +force_install_dir "$dir" \
           +login "$STEAM_USERNAME" \
           +app_update "$APP_ID" "${beta[@]}" validate \
           +quit
         echo "GAME_DIR=$dir" >> "$GITHUB_ENV"
 
+    # steamcmd exits 0 on a partial update, so a half-downloaded install used to ship and then
+    # get saved back to the cache, poisoning every later build.
+    - name: Verify game install
+      if: steps.creds.outputs.present == 'true' && steps.gate.outputs.skipped != 'true'
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        WANT: ${{ steps.gate.outputs.published }}
+      run: |
+        set -euo pipefail
+        acf="$GAME_DIR/steamapps/appmanifest_${APP_ID}.acf"
+        [ -f "$acf" ] || { echo "no appmanifest at $acf - the download never ran" >&2; exit 1; }
+        state="$(grep -oP '"StateFlags"\s+"\K[0-9]+' "$acf")"
+        got="$(grep -oP '"buildid"\s+"\K[0-9]+' "$acf")"
+        [ "$state" = 4 ] || { echo "StateFlags=$state, want 4 (fully installed)" >&2; exit 1; }
+        # WANT is empty when the buildid lookup failed; the gate tolerates that, so we do too.
+        if [ -n "$WANT" ] && [ "$got" != "$WANT" ]; then
+          echo "buildid=$got, want $WANT" >&2
+          exit 1
+        fi
+
+    - name: Save game install cache
+      if: steps.creds.outputs.present == 'true' && steps.gate.outputs.skipped != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ runner.temp }}/steam-game
+        key: steam-${{ inputs.app-id }}-${{ inputs.branch }}-${{ inputs.steam-platform != '' && inputs.steam-platform || 'host' }}-${{ steps.gate.outputs.published }}
+
     - name: Build and push image
       id: build
-      if: steps.gate.outputs.skipped != 'true'
+      if: steps.creds.outputs.present == 'true' && steps.gate.outputs.skipped != 'true'
       shell: bash
       env:
         IMAGE: ${{ steps.base.outputs.image }}
@@ -237,6 +337,18 @@ runs:
         PLATFORM: ${{ inputs.platform }}
         INCLUDE_PATHS: ${{ inputs.include-paths }}
       run: "${{ github.action_path }}/scripts/build-image.sh"
+
+    - name: Refuse to leave the image public
+      if: inputs.require-private == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        # runs even when the build-id gate skipped: the image still exists, and it can be
+        # flipped public in the registry ui long after the last push
+        name="${IMAGE#"${REGISTRY}/"}"
+        "${{ github.action_path }}/scripts/assert-private.sh" "$REGISTRY" "$name"
 
     - name: Wipe Steam credentials
       if: always()

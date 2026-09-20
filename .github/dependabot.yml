@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      # chore is absent from releaseRules, so a CI-only bump does not cut a release
+      prefix: "chore(deps)"
+
+  # both runtime-base Dockerfiles sit at the repo root, so one entry covers them
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      docker:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
