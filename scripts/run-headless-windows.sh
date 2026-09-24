@@ -32,6 +32,7 @@ export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH PROTON_DIR DESKTO
 # explorer detaches, so wineserver -w is what holds Xvfb open.
 # shellcheck disable=SC2016 # deliberate: the inner sh expands these, not this shell
 run_under_xvfb sh -c '
+  set -e
   "$PROTON_DIR/proton" run explorer "/desktop=game,$DESKTOP" "$@"
   WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx" exec "$PROTON_DIR/files/bin/wineserver" -w
 ' _ "$@"
