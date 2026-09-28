@@ -3,7 +3,7 @@
 # Proton renders D3D through DXVK, which needs a Vulkan driver, so Mesa's lavapipe
 # supplies one on a GPU-less runner. Wine's own OpenGL path is not a fallback: it
 # hangs RimWorld on boot whether or not the display is real.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
