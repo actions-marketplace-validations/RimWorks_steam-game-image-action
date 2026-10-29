@@ -1,0 +1,60 @@
+# Runs this repo's own action against a real Steam account and a real registry.
+# Manual only: every run downloads the game and pushes an image.
+name: selftest
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Steam branch to build."
+        required: false
+        default: "public"
+        type: string
+      variant:
+        description: "Image variant. Empty builds every one the plugin declares."
+        required: false
+        default: "linux"
+        type: string
+      force:
+        description: "Build even when the published buildid already matches."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # ./ rather than a released tag: this tests the working tree's action.yml
+      - id: build
+        uses: ./
+        with:
+          game: rimworld
+          branch: ${{ inputs.branch }}
+          variant: ${{ inputs.variant }}
+          image: ghcr.io/${{ github.repository_owner }}/rimworld-game-runnable
+          steam-username: ${{ secrets.STEAM_USERNAME }}
+          steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF_B64 }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          skip-if-unchanged: ${{ inputs.force && 'false' || 'true' }}
+
+      - name: Report what the action returned
+        shell: bash
+        env:
+          REF: ${{ steps.build.outputs.image-ref }}
+          SKIPPED: ${{ steps.build.outputs.skipped }}
+          RESULTS: ${{ steps.build.outputs.results }}
+        run: |
+          set -euo pipefail
+          printf 'image-ref: %s\nskipped:   %s\n' "$REF" "$SKIPPED"
+          printf '%s' "$RESULTS" | jq -r '.[] | "\(.branch)/\(.variant)\t\(.status)\t\(.reason)"'
+          # a run that neither built nor skipped means the outputs are wrong, not the build
+          [ -n "$REF" ] || [ "$SKIPPED" = "true" ]

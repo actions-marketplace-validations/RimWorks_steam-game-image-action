@@ -1,16 +1,5 @@
-# Drop this in YOUR mod repo at .github/workflows/build.yml
-# Compiles a mod against the REAL game assemblies from your private image (built by
-# build-on-demand.yml / watch-and-build.yml in this same examples/ folder).
-#
-# It pulls the private image, extracts the managed DLLs to a path your .csproj
-# references, and builds.
-#
-# HEADS-UP (RimWorld + many Unity games): the public Krafs.Rimworld.Ref NuGet ships
-# *publicized* reference assemblies (every member made public). The REAL shipped DLLs
-# are NOT publicized, so source that uses `public override` on a protected member, or
-# touches non-public members, will NOT compile against them (you'll get CS0507 /
-# CS0122). Either match the real access levels, or add a publicizer to your csproj
-# (e.g. Krafs.Publicizer with <Publicize Include="Assembly-CSharp" />).
+# Drop this in YOUR mod repo at .github/workflows/build.yml. It builds against the game
+# image from build-on-demand.yml or watch-and-build.yml in this same examples/ folder.
 name: build
 
 on:
@@ -50,8 +39,6 @@ jobs:
 
       - name: Build the mod
         run: |
-          # Reference the real DLLs from your .csproj, e.g.:
-          #   <Reference Include="/mnt/games/RimWorld/RimWorldLinux_Data/Managed/*.dll"
-          #             Condition="Exists('/mnt/games/RimWorld/RimWorldLinux_Data/Managed')" />
-          # Many RimWorld csprojs already check this path and fall back to Krafs.Rimworld.Ref.
+          # Your .csproj references the staged path, guarded so a fresh clone still loads:
+          #   <Reference Include="/mnt/games/RimWorld/RimWorldLinux_Data/Managed/*.dll" Condition="Exists('/mnt/games/RimWorld/RimWorldLinux_Data/Managed')" />
           dotnet build YourMod.sln -c Release

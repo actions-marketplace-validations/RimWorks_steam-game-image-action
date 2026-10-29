@@ -2,9 +2,15 @@
 
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/quality_gate?project=RimWorks_steam-game-image-action)](https://sonarcloud.io/summary/new_code?id=RimWorks_steam-game-image-action)
 
-Downloads a Steam game with `steamcmd` and pushes it as a private OCI image to a registry you
-control. CI can then build mods against the real shipped assemblies and launch the game in a
-container. Defaults to RimWorld (app `294100`) but works for any Steam app you own.
+Downloads a Steam game and pushes it as a private OCI image to a registry you control. CI can
+then launch the game in a container or build mods against the real shipped assemblies. It
+defaults to RimWorld, and works for any Steam app you own that has a gamecrate plugin.
+
+The action installs [`@gamecrate/cli`](https://www.npmjs.com/package/@gamecrate/cli) plus a game
+plugin, then runs one command: `gamecrate steam build <game> --push --image <ref> --json`.
+gamecrate downloads the depots with `steamcmd` in a container and appends them onto a published
+runtime base with `crane`. The plugin supplies the app id, the depots, and the branch and variant
+matrix, so you name a game instead of a pile of Steam facts.
 
 This tool never publishes the game image. You build it from your own Steam-owned copy and push
 it to your own private registry. Only the tooling here is open source (MIT). Redistributing the
@@ -19,8 +25,8 @@ steamcmd +login your-steam-account     # complete Steam Guard
 base64 -w0 ~/Steam/config/config.vdf   # copy this
 ```
 
-Save the base64 blob as a repo secret named `STEAM_CONFIG_VDF`. The session expires eventually.
-When it does, re-run these two commands and update the secret.
+Save the base64 blob as a repo secret named `STEAM_CONFIG_VDF_B64`. The session expires eventually.
+When it does, run these two commands again and update the secret.
 
 Then add a workflow:
 
@@ -30,10 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { packages: write, contents: read }
     steps:
-      - uses: RimWorks/steam-game-image-action@v1
+      - uses: RimWorks/steam-game-image-action@v4
         with:
+          game: rimworld
           steam-username: your-steam-account
-          steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF_B64 }}
           image: ghcr.io/${{ github.repository_owner }}/rimworld-game
           registry-password: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -43,18 +50,60 @@ That pushes `ghcr.io/you/rimworld-game:<version>`, `:latest` and a branch-scoped
 
 The action then fails the job if that image is anonymously pullable, because a public game image
 is redistribution. It follows the registry's own auth challenge, so it works on GHCR, Docker Hub,
-GitLab, quay and anything else implementing the Distribution v2 spec. The check runs on every
-invocation, including one the build-id gate skipped, because a package can be flipped to public
+GitLab, quay and anything else that implements the Distribution v2 spec. The check runs on every
+invocation, including one where every cell skipped, because someone can flip a package to public
 in the registry UI long after its last push. Set `require-private: false` to turn it off.
 
 To keep the image fresh, copy [`examples/watch-and-build.yml`](examples/watch-and-build.yml). A
 scheduled run compares the published buildid against your image's `steam.buildid` label and
 downloads nothing when they match, so cron runs stay cheap.
 
+## Inputs
+
+| input | default | notes |
+|---|---|---|
+| `game` | `rimworld` | the game the plugin provides |
+| `plugin` | `""` | plugin packages, one per line. Empty means `@gamecrate/<game>` |
+| `gamecrate-version` | `""` | version of `@gamecrate/cli` to install. Empty means latest |
+| `steam-username` | `""` | account that owns the game. Empty means no Steam access, see below |
+| `steam-config-vdf` | `""` | base64 of a steamcmd `config.vdf` (a secret) |
+| `branch` | `public` | Steam branch, for example `1.5`. Empty means every branch the plugin declares |
+| `branch-password` | `""` | for a password-protected beta branch |
+| `variant` | `""` | one image variant. Empty means every variant the plugin declares |
+| `image` | required | target ref without a tag, for example `ghcr.io/you/rimworld-game` |
+| `registry` | `ghcr.io` | registry host for auth |
+| `registry-username` | the GitHub actor | registry username |
+| `registry-password` | required | registry token. For GHCR pass `secrets.GITHUB_TOKEN` with `packages: write` |
+| `base-image` | `""` | override the published runtime base a variant appends onto |
+| `platform` | `linux/amd64` | image platform |
+| `require-private` | `true` | fail when the pushed image is anonymously pullable |
+| `skip-if-unchanged` | `true` | skip a cell whose published buildid matches the image's `steam.buildid` label |
+
+Outputs:
+
+- `image-ref` is the ref to consume. It is the first versioned tag the build pushed, or the ref
+  a credentialed run already pushed when this run had no secrets.
+- `results` is a JSON array with one entry per branch and variant. Each entry carries its
+  `status`, `reason` and `tags`.
+- `skipped` is `true` when every cell skipped, or when the run had no Steam credentials.
+
+A failed cell prints a `::error::` line naming the branch, the variant and the reason, and fails
+the job.
+
+### Runs without Steam credentials
+
+A pull request from a fork gets no repository secrets, so `steam-username` and
+`steam-config-vdf` arrive empty. The action then skips the build and outputs the
+`image:latest-<branch>` ref a credentialed run already pushed, with `skipped` set to `true`.
+`registry-password` is still needed to pull it, and `GITHUB_TOKEN` with `packages: read` is
+enough. If that tag does not exist yet the action fails and says so, because only a run with
+credentials can build it.
+
 ## Launch the game
 
-The runnable base ships a `run-headless` wrapper. It gives the game a virtual display, hands the
-game user the directories Docker created for your mounts, then drops to an unprivileged user:
+The runnable variant ships a `run-headless` wrapper. It gives the game a virtual display, hands
+the game user the directories Docker created for your mounts, then drops to an unprivileged
+user:
 
 ```sh
 docker run --rm ghcr.io/you/rimworld-game:latest run-headless /game/RimWorldLinux
@@ -90,19 +139,21 @@ RimWorld has no official headless test mode. This image supplies a display and t
 libraries so a launch can proceed. You still need a test-runner mod that boots a scenario,
 asserts and exits with a status. [Pickle](https://github.com/RimWorks/Rimworld-Pickle) is one.
 
-For a Windows game on a Linux runner, use `run-headless-windows` and pass Wine paths, where `Z:`
-is the container root:
+For a Windows game on a Linux runner, build the plugin's Windows variant and use
+`run-headless-windows`. Pass Wine paths, where `Z:` is the container root:
 
 ```sh
 docker run --rm ghcr.io/you/rimworld-game-windows:latest \
   run-headless-windows 'Z:\game\RimWorldWin64.exe' '-logfile' 'Z:\out\Player.log'
 ```
 
+That variant carries Proton and Mesa's software Vulkan driver. A CI runner has no GPU, so the
+game renders on the CPU and boots slowly.
+
 ## Build a mod against the real assemblies
 
-A community reference package, such as `Krafs.Rimworld.Ref` for RimWorld, is usually the easier
-path. Reach for the image when you need a member the reference package does not expose, or when
-you want the exact assemblies a specific game build shipped.
+The image carries the exact assemblies a specific game build shipped, so what compiles in CI is
+what runs on a player's machine. It also covers any Steam branch, including a beta.
 
 Pull the image, copy the managed DLLs onto the runner, then build:
 
@@ -122,64 +173,26 @@ Pull the image, copy the managed DLLs onto the runner, then build:
 
 Point your `.csproj` at the staged DLLs with a `Reference` and a `HintPath` guarded by
 `Exists()`, then build. A fresh clone has no image, so an unguarded `HintPath` breaks local
-builds.
-
-A smaller image is enough for this. Set `include-paths: RimWorldLinux_Data/Managed` and
-`runnable: false` to get the assemblies on a minimal base instead of the whole game. The full
-runnable copy of this workflow is in
+builds. The shipped DLLs are not publicized, so source that touches a non-public member, or
+puts `public override` on a protected one, fails with CS0122 or CS0507. Match the real access
+levels, or add a publicizer. If the plugin declares a build-only variant, pass its name to
+`variant` for a much smaller image. The full runnable copy of this workflow is in
 [`examples/build-mod-against-game.yml`](examples/build-mod-against-game.yml).
-
-## Inputs
-
-| input | default | notes |
-|---|---|---|
-| `steam-username` | `""` | account that owns the game. Empty means no Steam access, see below |
-| `steam-config-vdf` | `""` | base64 of a steamcmd `config.vdf` (a secret) |
-| `app-id` | `294100` | Steam app id (RimWorld) |
-| `branch` | `public` | Steam branch, e.g. `1.5`, `1.4` |
-| `branch-password` | `""` | for password-protected betas |
-| `steam-platform` | `""` (the host's) | depot platform: `linux`, `windows`, `macos`. Pair `windows` with the Proton base |
-| `image` | N/A | target ref without tag, e.g. `ghcr.io/you/rimworld-game` |
-| `registry` / `registry-username` / `registry-password` | `ghcr.io` / actor / N/A | push auth (GHCR and `GITHUB_TOKEN` works) |
-| `runnable` | `true` | `true` appends onto the xvfb base; `false` gives a minimal build-only base |
-| `include-paths` | `""` (whole game) | space or newline separated subpaths, e.g. `RimWorldLinux_Data/Managed` |
-| `skip-if-unchanged` | `true` | gate on the `steam.buildid` label of `:latest-<branch>` |
-| `base-image` | the xvfb base | override, e.g. the Proton base for a Windows depot |
-
-Outputs: `image-ref`, `version`, `buildid`, `skipped`. `image-ref` is the `image:version` ref
-when the action built, and the `image:latest-<branch>` ref when the gate skipped, so it is
-always pullable.
-
-### Runs without Steam credentials
-
-A pull request from a fork gets no repository secrets, so `steam-username` and
-`steam-config-vdf` arrive empty. The action then skips steamcmd entirely and outputs the
-`image:latest-<branch>` ref a credentialed run already pushed, with `skipped` set to `true`.
-`registry-password` is still needed to pull it; `GITHUB_TOKEN` with `packages: read` is enough.
-If that tag does not exist yet the action fails and says so, since only a run with credentials
-can build it.
-
-Three combinations cover most uses:
-
-- **Runnable (default).** `runnable: true` with `include-paths` empty puts the whole game on the
-  xvfb base, so you can launch it. It is about a gigabyte.
-- **Build only.** `include-paths: RimWorldLinux_Data/Managed` with `runnable: false` gets you the
-  managed assemblies on a minimal base. (`include-paths` is relative to the game install. The
-  `*_Data/Managed` layout is a Unity convention.)
-- **Windows on a Linux runner.** Set `steam-platform: windows` and point `base-image` at
-  `ghcr.io/rimworks/steam-game-image-action/runtime-base-proton:latest`. That base carries Proton
-  and Mesa's software Vulkan driver. A CI runner has no GPU, so the game renders on the CPU and
-  boots slowly.
 
 ## How it works
 
-`steamcmd` downloads the game. `crane append` layers it onto a public, game-free
-[`runtime-base`](Dockerfile.runtime-base) image, needing no Docker daemon, and pushes to your
-registry with a `steam.buildid` OCI label. That label is the only state the build-id gate needs.
+gamecrate asks Steam for the app info, compares the published buildid against the
+`steam.buildid` label on the image's `latest-<branch>` tag, and skips the cell when they match.
+On a real rebuild it downloads the depots with `steamcmd`, then `crane append` layers them onto
+a public, game-free runtime base and pushes to your registry. No Docker daemon is involved in
+the push.
 
-Two caches keep it cheap. The build-id gate skips the whole download when the published buildid
-matches the label on the branch's `latest-<branch>` tag. On a real rebuild, `actions/cache`
-restores the prior install so `app_update` fetches only the changed files.
+`actions/cache` keeps the download cheap. It stores the install under
+`~/.local/share/gamecrate/steam/apps`, keyed per app, branch and depot, so variants that share a
+depot share a cache entry and `app_update` fetches only the changed files.
+
+The Steam session is a live credential, so the last step wipes it under `if: always()`. A failed
+run does not leave a login behind.
 
 ## License
 

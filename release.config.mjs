@@ -1,5 +1,5 @@
 // semantic-release: version the action from conventional commits, cut a GitHub
-// Release, and move the floating major tag (v1) so consumers pinning @v1 keep
+// Release, and move the floating major tag so consumers pinning a major keep
 // getting the latest v1.x.x. No CHANGELOG file and no version-bump commit - the
 // git tag is the source of truth (matches the other repos here).
 export default {

@@ -1,14 +1,5 @@
-# Reusable workflow: build + push a private Steam game image.
-# Consumers call this from their own repo:
-#
-#   jobs:
-#     build:
-#       uses: RimWorks/steam-game-image-action/.github/workflows/build-image.yml@v1
-#       with:   { image: ghcr.io/you/rimworld-game }
-#       secrets:
-#         steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
-#         registry-password: ${{ secrets.GITHUB_TOKEN }}
-#       permissions: { packages: write }
+# Reusable workflow: build and push a private Steam game image.
+# Calling it from your own repo is documented in README.md.
 name: build-image
 
 on:
@@ -22,19 +13,20 @@ on:
         description: "Steam account name (not secret)."
         required: true
         type: string
-      app-id:
+      game:
         required: false
         type: string
-        default: "294100"
+        default: "rimworld"
+      plugin:
+        description: "Plugin packages supplying the game facts, one per line."
+        required: false
+        type: string
+        default: ""
       branch:
         required: false
         type: string
         default: "public"
-      runnable:
-        required: false
-        type: string
-        default: "true"
-      include-paths:
+      variant:
         required: false
         type: string
         default: ""
@@ -63,15 +55,15 @@ jobs:
       packages: write
       contents: read
     steps:
-      - uses: RimWorks/steam-game-image-action@3152efb5411f3e637260569fb68cfd8fb5ed55c1 # v1
+      - uses: RimWorks/steam-game-image-action@v4
         with:
+          game: ${{ inputs.game }}
+          plugin: ${{ inputs.plugin }}
           steam-username: ${{ inputs.steam-username }}
           steam-config-vdf: ${{ secrets.steam-config-vdf }}
-          app-id: ${{ inputs.app-id }}
           branch: ${{ inputs.branch }}
+          variant: ${{ inputs.variant }}
           image: ${{ inputs.image }}
           registry: ${{ inputs.registry }}
           registry-password: ${{ secrets.registry-password }}
-          runnable: ${{ inputs.runnable }}
-          include-paths: ${{ inputs.include-paths }}
           skip-if-unchanged: ${{ inputs.skip-if-unchanged }}

@@ -1,8 +1,7 @@
 # Drop this in YOUR repo at .github/workflows/rimworld-image-watch.yml
-# This IS the watcher: it runs on a schedule and rebuilds ONLY when Steam has a new
-# build. The action's build-id gate makes each scheduled run cheap when nothing
-# changed (it checks the published buildid against your image's steam.buildid label
-# and downloads nothing if they match). Uses the reusable workflow for brevity.
+# A scheduled run costs almost nothing when Steam has not moved: the build-id gate
+# compares the published buildid to your image's steam.buildid label and, when they
+# match, downloads no bytes at all.
 name: rimworld-image-watch
 
 on:
@@ -13,14 +12,13 @@ on:
 
 jobs:
   build:
-    uses: RimWorks/steam-game-image-action/.github/workflows/build-image.yml@v1
+    uses: RimWorks/steam-game-image-action/.github/workflows/build-image.yml@v4
     with:
       image: ghcr.io/${{ github.repository_owner }}/rimworld-game
       steam-username: your-steam-account
-      app-id: "294100"
+      game: rimworld
       branch: public
-      runnable: "true"
       skip-if-unchanged: "true"
     secrets:
-      steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
+      steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF_B64 }}
       registry-password: ${{ secrets.GITHUB_TOKEN }}

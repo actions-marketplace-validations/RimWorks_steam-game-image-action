@@ -1,7 +1,7 @@
 # Drop this in YOUR repo at .github/workflows/rimworld-image.yml
-# Builds your private RimWorld image on demand. Requires repo secrets:
-#   STEAM_CONFIG_VDF  - base64 of a steamcmd config.vdf for an account that owns the game
-# (GITHUB_TOKEN is provided automatically and can push to your repo's GHCR namespace.)
+# Builds your private RimWorld image on demand. Requires one repo secret:
+#   STEAM_CONFIG_VDF_B64  - base64 of a steamcmd config.vdf for an account that owns the game
+# GITHUB_TOKEN is provided automatically and can push to your repo's GHCR namespace.
 name: rimworld-image
 
 on:
@@ -14,12 +14,11 @@ jobs:
       packages: write
       contents: read
     steps:
-      - uses: RimWorks/steam-game-image-action@v1
+      - uses: RimWorks/steam-game-image-action@v4
         with:
           steam-username: your-steam-account
-          steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF }}
-          app-id: "294100"        # RimWorld
+          steam-config-vdf: ${{ secrets.STEAM_CONFIG_VDF_B64 }}
+          game: rimworld          # the plugin @gamecrate/rimworld supplies the rest
           branch: public          # or 1.5, 1.4, ...
           image: ghcr.io/${{ github.repository_owner }}/rimworld-game
           registry-password: ${{ secrets.GITHUB_TOKEN }}
-          runnable: "true"
