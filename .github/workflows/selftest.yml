@@ -31,7 +31,7 @@ jobs:
       packages: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # ./ rather than a released tag: this tests the working tree's action.yml
       - id: build
